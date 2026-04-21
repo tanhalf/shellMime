@@ -39,13 +39,13 @@ int main(int argc, char *argv[]) {
     }
     
     if(argc < 2){ 
-        printf("bcshell> "); 
+        printf("shellMime> "); 
         fflush(stdout); 
         pointer = stdin;
     }
         
     else if(argc > 2){
-        fprintf(stderr, "Usage: bcshell [BATCHFILE]\n");
+        fprintf(stderr, "Usage: shellMime [BATCHFILE]\n");
         exit(1);
     }
     else{
@@ -53,7 +53,7 @@ int main(int argc, char *argv[]) {
     }
         while((read = getline(&line, &len, pointer)) != -1){
             if(argc < 2){ 
-            printf("bcshell> "); 
+            printf("shellMime> "); 
             fflush(stdout);
             } 
             line[strcspn(line, "\r\n")] = '\0';
