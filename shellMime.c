@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <fcntl.h>
 
+//global array for forking with &
 int last_exec_status = 0;
 pid_t *pid_list; 
 int p_index = 0;
@@ -20,6 +21,7 @@ void forkIt();
 int checkDelim(char*cmdLine);
 int isProgram(char* line);
 char* findcmd(char* cmd);
+char* trim(char* line);
 
 int main(int argc, char *argv[]) {
     
@@ -28,7 +30,7 @@ int main(int argc, char *argv[]) {
     ssize_t read;
     FILE *batch;
     FILE *pointer;
-    list = malloc(sizeof(char*) * 1);
+    list = malloc(sizeof(char**) * 1);
 
     if (argc == 2){ 
         batch = fopen(argv[1], "r"); 
@@ -64,7 +66,7 @@ int main(int argc, char *argv[]) {
                 continue;
             char *ptr = line;
             char *cmd;
-        while ((cmd = strsep(&ptr, ";")) != NULL){
+        while ((cmd = strsep(&ptr, ";\n")) != NULL){
             p_index =0;
             if (*cmd == '\0'){
                 continue;
@@ -82,78 +84,103 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "Usage: cannot use exit with arguments");
                 exit(0);
             }
-
+            //printf("cmd is %s\n", copy);
             last_exec_status = checkDelim(copy);
-            printf("made it back to main!\n");
+            //printf("made it back to main!\n");
             forkIt();
-            
-            int len = sizeof(pid_list) / sizeof(pid_list[0]);
-            for(int i = 0; i < len; i++) {
+            for (int i = 0; i < size; i++) {
+                free(list[i]);
+            }
+            free(list);
+            list = malloc(sizeof(char**) * 1);
+            for(int i = 0; i < size; i++) {
                 handleExit(pid_list[i]); 
             }
+            
             size = 0;
-            list = NULL;
 
-            if (last_exec_status == 1){ 
+            if (last_exec_status == 1){
                 exit(1);
             }
         }
         }
     exit(0);
-
 }
 
 int checkDelim(char *cmdLine){
-    char *copy = strdup(cmdLine);
+    //printf("made it to checkdelim: %s\n\n", cmdLine);
     if(cmdLine == NULL)
         return last_exec_status;
-    while(*copy == ' ')
-            copy++;
-    char*arg;
+    char *copy = strdup(cmdLine);
+    char *ptr = copy;
     char **args = malloc(sizeof(char*) * 2); 
-    char *delim = strpbrk(copy, "&<>");
+    char *delim = strpbrk(ptr, "&<>");
+    //printf("delim: %s\n", delim);
 
     args[0] = NULL;
     args[1] = NULL;
 
     if(delim == NULL){
-        executeAndOp(copy);
-        free(args);
-        return last_exec_status;
+        //printf("made it to delim = NULL: %s\n", ptr);
+        
+        executeAndOp(trim(ptr));
+        //free(args);
+        //free(copy);
+        return last_exec_status=0;
     }
     else if(*delim == '&'){
-        executeAndOp(strsep(&copy, "&"));
-        free(args);
-        checkDelim(copy);
+        //printf("made it to executeAndOps: %s\n\n", ptr);
+        char *trimPtr = trim(strsep(&ptr, "&"));
+        executeAndOp(trimPtr);
+        //free(args);
+        checkDelim(ptr);
     }
     else if(*delim == '<'){
         char *program = strsep(&copy, " < ");
         char *inputFile = strsep(&copy, "&<> ");
-        executeInputOp(program, inputFile,args);
+        executeInputOp(program, inputFile,args); 
         free(args);
+        //return last_exec_status;
     }
     else if(*delim == '>'){
-        char *program = strsep(&copy, ">");
-        char *outputFile = strsep(&copy, "&<>");
+        char *program = strsep(&ptr, ">");
+        char *outputFile = trim(ptr);
         executeOutputOp(program, outputFile, args);
-        free(args);
+        return last_exec_status;
     }
     return last_exec_status;
 
 }
 void addFork(char**args){
+    if(last_exec_status == -1)
+        return;
+    int args_size =0;
+    while(args[args_size] != NULL){
+        args_size++;
+    }
+    //printf("made it to addFork \n");
+    char** temp_args = malloc(sizeof(char*) * (args_size + 1));
     list = realloc(list, sizeof(char**) * (size + 1));
-    list[size] = args;
+    for(int i = 0; i < args_size; i++){
+        temp_args[i] = strdup(args[i]);
+        //printf("made it to addFork, size: %s\n", temp_args[i]);
+    }
+    list[size] = temp_args;
     size++;
+    return;
     
 }
 
 void forkIt() {
     int failed = 0;
+    //printf("fork called\n\n");
+    pid_list = malloc(sizeof(pid_t) * size);
+    
     for(int i = 0; i < size; i++){
         pid_t p = fork();
         if (p == 0){
             execv(list[i][0], list[i]);
+            exit(0);
         }
         else{
             pid_list[failed] = p;
@@ -171,20 +198,28 @@ void executeOutputOp(char *program, char *output, char **args){
             perror("opening output file failed");
             exit(1);
         }
-        dup2(fd, 1); 
+        dup2(fd, STDOUT_FILENO); 
         close(fd);
-        execv(args[0], args);
-        perror("execv for executeOutputOp failed");
-        exit(1);
+        executeAndOp(trim(program));
+        forkIt();
+        for(int i = 0; i < size; i++) {
+            wait(NULL);
+        }
+        
+        exit(0);
     }
-    else if(p>0){
-        handleExit(p);
+    else if (p > 0) {
+        waitpid(p, NULL, 0);
+        last_exec_status = -1;
+        size = 0;
     }
 }
 
 void executeInputOp(char *program, char *input, char **args){
     args[0] = program;
     pid_t p = fork();
+    size = 0;
+    list = NULL;
     if(p == 0){ 
         int fd = open(input, O_RDONLY);
         if(fd < 0){
@@ -210,6 +245,8 @@ void executeAndOp(char*cmdSeg){
     args[1] = NULL;
     char *copy = strdup(cmdSeg);
     char *pro = strsep(&copy, " &<>");
+    //printf("inside AndOp func:copy: %s\n", copy);
+    //printf("inside AndOp func:pro:  %s\n", pro);
     if(isProgram(pro)==1){
         args[0] = strdup(pro);
         free(pro);
@@ -226,13 +263,16 @@ void executeAndOp(char*cmdSeg){
         char *token;
         cap = 1;
         while((token = strsep(&copy, " &<>")) != NULL){
-            args = realloc(args, sizeof(char*) * (cap + 1));
-            args[cap] = token;
+            if(*token == '\0')
+                continue;
+            args = realloc(args, sizeof(char*) * (cap + 2));
+            args[cap] = token; 
             cap++;
         }
         args[cap] = NULL;
         free(copy);
-        addFork(args); 
+        addFork(args); //dont fork yet, add to a list for forking
+        free(args);
 
     return;
 }
@@ -243,6 +283,45 @@ int isProgram(char* line){
     return 0;
 }
 
+char* trim(char* line){
+    char *new;
+    char *ptr = line;
+    int count = 0;
+    int bcount;
+
+    while(*ptr == ' ')
+        ptr++;
+    
+    while(*ptr != '\0' && *ptr != '\n' && *ptr != '\r'){
+        count++;
+        ptr++;
+    }
+
+    while(*ptr == ' '){
+        count--;
+        ptr--;
+    }
+    
+    bcount = count;
+    
+    while(bcount != 0){
+        ptr--;
+        bcount--;
+    }
+
+    new = malloc((sizeof(char)) * (count+1));
+    
+    //printf("trim result: %s", ptr);
+   for(int i = 0; i < count; i++){
+        new[i] = *ptr;
+        ptr++;
+   }
+   
+   new[count] = '\0';
+   //printf("trim result after for loop: %s.\n\n", new);
+    return new;
+}
+
 char* findcmd(char* cmd){
     char *path = strdup(getenv("PATH"));
     char *dir;
@@ -251,7 +330,6 @@ char* findcmd(char* cmd){
     
     while((dir = strsep(&path, ":")) != NULL){
         len = strlen(dir) + strlen(cmd) + 2;
-        //free(checking);
         checking = malloc(len);
         snprintf(checking, len, "%s/%s", dir, cmd);
 
@@ -260,7 +338,6 @@ char* findcmd(char* cmd){
     }
     free(checking);
     return NULL;
-
 }
 
 void handleExit(pid_t p){
@@ -269,7 +346,7 @@ void handleExit(pid_t p){
     if (WIFEXITED(status)) {
         last_exec_status = WEXITSTATUS(status); // Save it!
     } else {
-        last_exec_status = 1; 
+        last_exec_status = 1; // It crashed/failed
         
     }
 }
